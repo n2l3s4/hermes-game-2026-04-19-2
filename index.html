@@ -48,20 +48,10 @@ function playChomp() {
   playTone(300, 'sawtooth', 0.1, 0.2);
   playTone(450, 'square', 0.08, 0.1, 0.05);
 }
-function playBurp() {
+function playPop() {
   if (muted || !audioCtx) return;
-  const t = audioCtx.currentTime;
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type = 'sawtooth';
-  osc.frequency.setValueAtTime(150, t);
-  osc.frequency.exponentialRampToValueAtTime(60, t + 0.4);
-  gain.gain.setValueAtTime(0.2, t);
-  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
-  osc.start(t);
-  osc.stop(t + 0.4);
+  playTone(200, 'sine', 0.15, 0.25);
+  playTone(300, 'sine', 0.1, 0.15, 0.05);
 }
 function playWin() {
   if (muted || !audioCtx) return;
@@ -75,32 +65,41 @@ function playMiss() {
 // Game state
 const foodsNeeded = 12;
 let foods = [];
-let caught = [];
+let tubeFoods = []; // foods inside worm tubes
+let poopedFoods = []; // foods flying out
 let gameOver = false;
 let spawnTimer = 0;
 let spawnInterval = 60;
 let score = 0;
-let worm1 = { x: 0, y: 0, w: 80, h: 100, color: '#FF69B4', targetX: 0 };
-let worm2 = { x: 0, y: 0, w: 80, h: 100, color: '#32CD32', targetX: 0 };
+let worm1 = { x: 0, y: 0, w: 90, h: 120, color: '#FF69B4', targetX: 0 };
+let worm2 = { x: 0, y: 0, w: 90, h: 120, color: '#32CD32', targetX: 0 };
 let draggedWorm = null;
 let foodTypes = ['🍎','🍐','🥕','🍇','🍒','🍃'];
 let particles = [];
 let winTime = 0;
+let buttonPressed = false;
+let buttonAnim = 0;
+
+// Button rect (set in draw)
+let outBtn = { x: 0, y: 0, w: 140, h: 70 };
 
 function resetGame() {
   foods = [];
-  caught = [];
+  tubeFoods = [];
+  poopedFoods = [];
   particles = [];
   gameOver = false;
   score = 0;
   spawnTimer = 0;
   winTime = 0;
+  buttonPressed = false;
+  buttonAnim = 0;
   worm1.targetX = W * 0.25;
   worm1.x = worm1.targetX;
-  worm1.y = H - 140;
+  worm1.y = H - 160;
   worm2.targetX = W * 0.55;
   worm2.x = worm2.targetX;
-  worm2.y = H - 140;
+  worm2.y = H - 160;
 }
 resetGame();
 
@@ -130,6 +129,43 @@ function addParticles(x, y, color) {
   }
 }
 
+function pressOutButton() {
+  if (gameOver) return;
+  initAudio();
+  buttonPressed = true;
+  buttonAnim = 10;
+  
+  // Find foods that have traveled far enough down the tube
+  let released = 0;
+  for (let i = tubeFoods.length - 1; i >= 0; i--) {
+    let tf = tubeFoods[i];
+    if (tf.progress >= 0.6) {
+      poopedFoods.push({
+        x: tf.worm.x,
+        y: tf.worm.y + tf.worm.h/2,
+        type: tf.type,
+        vx: (Math.random() - 0.5) * 8,
+        vy: 3 + Math.random() * 4,
+        rot: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 0.2
+      });
+      tubeFoods.splice(i, 1);
+      released++;
+    }
+  }
+  
+  if (released > 0) {
+    playPop();
+    for (let i = 0; i < released; i++) addParticles(W/2, H - 80, '#8B4513');
+    score += released;
+    if (score >= foodsNeeded) {
+      gameOver = true;
+      winTime = Date.now();
+      setTimeout(() => playWin(), 200);
+    }
+  }
+}
+
 // Input
 function getWormAt(x, y) {
   for (let w of [worm1, worm2]) {
@@ -138,11 +174,16 @@ function getWormAt(x, y) {
   return null;
 }
 
+function isOnButton(x, y) {
+  return x > outBtn.x && x < outBtn.x + outBtn.w && y > outBtn.y && y < outBtn.y + outBtn.h;
+}
+
 canvas.addEventListener('mousedown', e => {
   initAudio();
   const r = canvas.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
   if (gameOver) { resetGame(); return; }
+  if (isOnButton(x, y)) { pressOutButton(); return; }
   draggedWorm = getWormAt(x, y);
 });
 canvas.addEventListener('mousemove', e => {
@@ -160,6 +201,7 @@ canvas.addEventListener('touchstart', e => {
   const t = e.touches[0];
   const x = t.clientX - r.left, y = t.clientY - r.top;
   if (gameOver) { resetGame(); return; }
+  if (isOnButton(x, y)) { pressOutButton(); return; }
   draggedWorm = getWormAt(x, y);
 }, {passive:false});
 canvas.addEventListener('touchmove', e => {
@@ -179,6 +221,7 @@ window.addEventListener('keydown', e => {
   if (e.key === 'ArrowRight') { worm1.targetX = Math.min(W - 60, worm1.targetX + step); }
   if (e.key === 'a' || e.key === 'A') { worm2.targetX = Math.max(60, worm2.targetX - step); }
   if (e.key === 'd' || e.key === 'D') { worm2.targetX = Math.min(W - 60, worm2.targetX + step); }
+  if (e.key === ' ' || e.key === 'Enter') { pressOutButton(); }
 });
 
 document.getElementById('muteBtn').addEventListener('click', () => {
@@ -187,41 +230,59 @@ document.getElementById('muteBtn').addEventListener('click', () => {
 });
 
 function drawWorm(w, time) {
-  const wobble = Math.sin(time * 0.005 + w.x) * 5;
-  const mouthOpen = Math.max(10, 25 + Math.sin(time * 0.008) * 8);
+  const wobble = Math.sin(time * 0.005 + w.x) * 4;
+  const mouthOpen = Math.max(10, 22 + Math.sin(time * 0.008) * 6);
   ctx.save();
   ctx.translate(w.x, w.y + wobble);
 
   // Body
   ctx.fillStyle = w.color;
   ctx.beginPath();
-  ctx.ellipse(0, 30, w.w/2, w.h/2, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 35, w.w/2, w.h/2, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.lineWidth = 4;
   ctx.strokeStyle = '#333';
   ctx.stroke();
 
-  // Segments
-  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-  ctx.lineWidth = 3;
-  for (let i = -1; i <= 1; i++) {
-    ctx.beginPath();
-    ctx.arc(0, 20 + i * 25, w.w/2 - 8, 0, Math.PI * 2);
-    ctx.stroke();
+  // --- TUBE WINDOW (see-through belly) ---
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+  ctx.beginPath();
+  ctx.ellipse(0, 35, w.w/2 - 14, w.h/2 - 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(100, 60, 30, 0.4)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Tube path line
+  ctx.strokeStyle = 'rgba(139, 69, 19, 0.5)';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(0, 5);
+  ctx.lineTo(0, 75);
+  ctx.stroke();
+
+  // Draw foods inside tube
+  for (let tf of tubeFoods) {
+    if (tf.worm !== w) continue;
+    const ty = 5 + tf.progress * 70; // travel from top to bottom of tube
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(tf.type, 0, ty);
   }
 
   // Eyes
   ctx.fillStyle = '#FFF';
-  ctx.beginPath(); ctx.arc(-18, -10, 14, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle='#333'; ctx.lineWidth=2; ctx.stroke();
-  ctx.beginPath(); ctx.arc(18, -10, 14, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(-20, -15, 14, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle='#333'; ctx.lineWidth=2; ctx.stroke();
+  ctx.beginPath(); ctx.arc(20, -15, 14, 0, Math.PI*2); ctx.fill(); ctx.stroke();
   ctx.fillStyle = '#000';
-  ctx.beginPath(); ctx.arc(-16, -10, 5, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(20, -10, 5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(-18, -15, 5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(22, -15, 5, 0, Math.PI*2); ctx.fill();
 
   // Mouth
   ctx.fillStyle = '#8B0000';
   ctx.beginPath();
-  ctx.ellipse(0, 12, mouthOpen, 18, 0, 0, Math.PI*2);
+  ctx.ellipse(0, 8, mouthOpen, 16, 0, 0, Math.PI*2);
   ctx.fill();
   ctx.strokeStyle = '#333';
   ctx.lineWidth = 3;
@@ -229,68 +290,42 @@ function drawWorm(w, time) {
 
   // Cheeks
   ctx.fillStyle = 'rgba(255,100,100,0.4)';
-  ctx.beginPath(); ctx.arc(-28, 15, 8, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(28, 15, 8, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(-30, 10, 8, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(30, 10, 8, 0, Math.PI*2); ctx.fill();
 
   ctx.restore();
 }
 
-function drawMirror() {
-  const mw = Math.min(160, W * 0.22);
-  const mx = W - mw - 10;
-  const my = 10;
-  const mh = Math.min(220, H * 0.35);
+function drawOutButton() {
+  const bw = Math.min(160, W * 0.22);
+  const bh = 64;
+  const bx = W - bw - 14;
+  const by = H - bh - 20;
+  outBtn = { x: bx, y: by, w: bw, h: bh };
 
-  // Mirror frame
-  ctx.fillStyle = '#D2691E';
-  roundRect(mx - 6, my - 6, mw + 12, mh + 12, 14);
+  const pressOffset = buttonAnim > 0 ? 4 : 0;
+  if (buttonAnim > 0) buttonAnim--;
+
+  // Shadow
+  ctx.fillStyle = '#B8860B';
+  roundRect(bx, by + 6, bw, bh, 16);
   ctx.fill();
-  ctx.fillStyle = '#FFE4B5';
-  roundRect(mx, my, mw, mh, 10);
+
+  // Button body
+  ctx.fillStyle = '#FFD700';
+  roundRect(bx, by + pressOffset, bw, bh, 16);
   ctx.fill();
-  ctx.strokeStyle = '#8B4513';
-  ctx.lineWidth = 3;
-  roundRect(mx, my, mw, mh, 10);
+  ctx.strokeStyle = '#DAA520';
+  ctx.lineWidth = 4;
+  roundRect(bx, by + pressOffset, bw, bh, 16);
   ctx.stroke();
 
-  // Title
+  // Text
   ctx.fillStyle = '#8B4513';
-  ctx.font = `bold ${Math.max(12, mw * 0.12)}px Comic Sans MS`;
+  ctx.font = `bold ${Math.max(18, bw * 0.15)}px Comic Sans MS`;
   ctx.textAlign = 'center';
-  ctx.fillText('WORM TUMMY', mx + mw/2, my + 24);
-
-  // Stomach contents
-  const rows = 4, cols = 3;
-  const cellW = (mw - 20) / cols;
-  const cellH = (mh - 50) / rows;
-  for (let i = 0; i < foodsNeeded; i++) {
-    const cx = mx + 10 + (i % cols) * cellW + cellW/2;
-    const cy = my + 45 + Math.floor(i / cols) * cellH + cellH/2;
-    if (i < caught.length) {
-      ctx.font = `${Math.max(16, cellH * 0.6)}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(caught[i].type, cx, cy);
-    } else {
-      ctx.strokeStyle = 'rgba(139,69,19,0.2)';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(cx, cy, cellH*0.25, 0, Math.PI*2); ctx.stroke();
-    }
-  }
-}
-
-function roundRect(x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
+  ctx.textBaseline = 'middle';
+  ctx.fillText('GO OUT!', bx + bw/2, by + pressOffset + bh/2);
 }
 
 function drawGround() {
@@ -298,7 +333,6 @@ function drawGround() {
   ctx.beginPath();
   ctx.ellipse(W/2, H + 80, W * 0.8, 140, 0, 0, Math.PI*2);
   ctx.fill();
-  // Grass tufts
   ctx.strokeStyle = '#32CD32';
   ctx.lineWidth = 3;
   for (let i = 0; i < W; i += 40) {
@@ -349,7 +383,6 @@ function drawGameOver() {
   ctx.font = `${Math.max(14, boxW * 0.05)}px Comic Sans MS`;
   ctx.fillText('Tap or press any key to play again', W/2, H/2 + 35);
 
-  // Stars
   for (let i = 0; i < 12; i++) {
     const sx = bx + 20 + (i % 4) * (boxW/4);
     const sy = by + 20 + Math.floor(i/4) * 50;
@@ -357,6 +390,20 @@ function drawGameOver() {
     drawStar(sx, sy, 5, 10, 5);
   }
   ctx.restore();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }
 
 function drawStar(cx, cy, spikes, outer, inner) {
@@ -372,11 +419,9 @@ function drawStar(cx, cy, spikes, outer, inner) {
 function update() {
   if (gameOver) return;
 
-  // Smooth worm movement
   worm1.x += (worm1.targetX - worm1.x) * 0.15;
   worm2.x += (worm2.targetX - worm2.x) * 0.15;
 
-  // Spawn food
   spawnTimer++;
   if (spawnTimer > spawnInterval) {
     spawnFood();
@@ -384,37 +429,47 @@ function update() {
     spawnInterval = Math.max(25, 60 - score * 2);
   }
 
-  // Update foods
   for (let i = foods.length - 1; i >= 0; i--) {
     let f = foods[i];
     f.y += f.speed;
     f.rot += f.rotSpeed;
 
-    // Check catch in mouth
     for (let w of [worm1, worm2]) {
       const dx = f.x - w.x;
-      const dy = f.y - (w.y + 12);
-      if (Math.abs(dx) < 30 && Math.abs(dy) < 30) {
-        caught.push(f);
+      const dy = f.y - (w.y + 8);
+      if (Math.abs(dx) < 32 && Math.abs(dy) < 32) {
+        tubeFoods.push({
+          worm: w,
+          type: f.type,
+          progress: 0
+        });
         foods.splice(i, 1);
-        score++;
         playChomp();
-        addParticles(w.x, w.y + 20, '#FF69B4');
-        if (score >= foodsNeeded) {
-          gameOver = true;
-          winTime = Date.now();
-          playBurp();
-          setTimeout(() => playWin(), 400);
-        }
+        addParticles(w.x, w.y + 20, w.color);
         break;
       }
     }
 
-    // Missed
     if (f.y > H + 20) {
       foods.splice(i, 1);
       playMiss();
     }
+  }
+
+  // Advance food through tubes
+  for (let tf of tubeFoods) {
+    tf.progress += 0.008;
+    if (tf.progress > 1) tf.progress = 1;
+  }
+
+  // Update pooped foods
+  for (let i = poopedFoods.length - 1; i >= 0; i--) {
+    let p = poopedFoods[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.3;
+    p.rot += p.rotSpeed;
+    if (p.y > H + 50) poopedFoods.splice(i, 1);
   }
 
   // Particles
@@ -429,13 +484,12 @@ function draw() {
   const time = Date.now();
   ctx.clearRect(0, 0, W, H);
 
-  // Sky
   ctx.fillStyle = '#87CEEB';
   ctx.fillRect(0, 0, W, H);
   drawClouds();
   drawGround();
 
-  // Food
+  // Falling foods
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   for (let f of foods) {
@@ -447,9 +501,19 @@ function draw() {
     ctx.restore();
   }
 
-  // Worms
+  // Worms (tube foods drawn inside)
   drawWorm(worm1, time);
   drawWorm(worm2, time);
+
+  // Pooped foods
+  for (let p of poopedFoods) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.font = '28px sans-serif';
+    ctx.fillText(p.type, 0, 0);
+    ctx.restore();
+  }
 
   // Particles
   for (let p of particles) {
@@ -459,20 +523,20 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
-  // Mirror
-  drawMirror();
+  // GO OUT button
+  drawOutButton();
 
-  // Progress
+  // Score
   ctx.fillStyle = '#333';
   ctx.font = `bold ${Math.max(14, W * 0.025)}px Comic Sans MS`;
   ctx.textAlign = 'left';
-  ctx.fillText(`Yum! ${score} / ${foodsNeeded}`, 20, 40);
+  ctx.fillText(`Out: ${score} / ${foodsNeeded}`, 20, 40);
 
   // Hint
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.font = `${Math.max(12, W * 0.02)}px Comic Sans MS`;
   ctx.textAlign = 'center';
-  ctx.fillText('Drag worms or use ← → and A D keys!', W/2, H - 10);
+  ctx.fillText('Drag worms to eat, then press GO OUT!', W/2, H - 10);
 
   if (gameOver) drawGameOver();
 }
