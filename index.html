@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Bobo's Worm Feast</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #87CEEB; font-family: 'Comic Sans MS', 'Chalkboard SE', sans-serif; }
+  #gameCanvas { display: block; width: 100vw; height: 100vh; }
+  #muteBtn { position: absolute; top: 10px; right: 10px; width: 50px; height: 50px; border: none; border-radius: 50%; background: #FFD700; font-size: 24px; cursor: pointer; z-index: 10; box-shadow: 0 4px 0 #DAA520; }
+  #muteBtn:active { transform: translateY(4px); box-shadow: 0 0 0 #DAA520; }
+</style>
+</head>
+<body>
+<button id="muteBtn">🔊</button>
+<canvas id="gameCanvas"></canvas>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+// Audio
+let audioCtx = null, muted = false;
+function initAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+function playTone(freq, type, duration, vol = 0.15, when = 0) {
+  if (muted || !audioCtx) return;
+  const t = audioCtx.currentTime + when;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t);
+  gain.gain.setValueAtTime(vol, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(t);
+  osc.stop(t + duration);
+}
+function playChomp() {
+  if (muted || !audioCtx) return;
+  playTone(300, 'sawtooth', 0.1, 0.2);
+  playTone(450, 'square', 0.08, 0.1, 0.05);
+}
+function playBurp() {
+  if (muted || !audioCtx) return;
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(150, t);
+  osc.frequency.exponentialRampToValueAtTime(60, t + 0.4);
+  gain.gain.setValueAtTime(0.2, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(t);
+  osc.stop(t + 0.4);
+}
+function playWin() {
+  if (muted || !audioCtx) return;
+  [523, 659, 784, 1047].forEach((f, i) => playTone(f, 'sine', 0.3, 0.15, i * 0.15));
+}
+function playMiss() {
+  if (muted || !audioCtx) return;
+  playTone(150, 'triangle', 0.2, 0.1);
+}
+
+// Game state
+const foodsNeeded = 12;
+let foods = [];
+let caught = [];
+let gameOver = false;
+let spawnTimer = 0;
+let spawnInterval = 60;
+let score = 0;
+let worm1 = { x: 0, y: 0, w: 80, h: 100, color: '#FF69B4', targetX: 0 };
+let worm2 = { x: 0, y: 0, w: 80, h: 100, color: '#32CD32', targetX: 0 };
+let draggedWorm = null;
+let foodTypes = ['🍎','🍐','🥕','🍇','🍒','🍃'];
+let particles = [];
+let winTime = 0;
+
+function resetGame() {
+  foods = [];
+  caught = [];
+  particles = [];
+  gameOver = false;
+  score = 0;
+  spawnTimer = 0;
+  winTime = 0;
+  worm1.targetX = W * 0.25;
+  worm1.x = worm1.targetX;
+  worm1.y = H - 140;
+  worm2.targetX = W * 0.55;
+  worm2.x = worm2.targetX;
+  worm2.y = H - 140;
+}
+resetGame();
+
+function spawnFood() {
+  const size = 36;
+  const margin = Math.min(W, H) * 0.22;
+  foods.push({
+    x: margin + Math.random() * (W - margin * 2),
+    y: -40,
+    size: size,
+    type: foodTypes[Math.floor(Math.random() * foodTypes.length)],
+    speed: 2 + Math.random() * 2,
+    rot: Math.random() * Math.PI * 2,
+    rotSpeed: (Math.random() - 0.5) * 0.1
+  });
+}
+
+function addParticles(x, y, color) {
+  for (let i = 0; i < 8; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: (Math.random() - 0.5) * 6,
+      life: 30,
+      color
+    });
+  }
+}
+
+// Input
+function getWormAt(x, y) {
+  for (let w of [worm1, worm2]) {
+    if (x > w.x - w.w/2 - 20 && x < w.x + w.w/2 + 20 && y > w.y - 20 && y < w.y + w.h + 20) return w;
+  }
+  return null;
+}
+
+canvas.addEventListener('mousedown', e => {
+  initAudio();
+  const r = canvas.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  if (gameOver) { resetGame(); return; }
+  draggedWorm = getWormAt(x, y);
+});
+canvas.addEventListener('mousemove', e => {
+  if (!draggedWorm) return;
+  const r = canvas.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  draggedWorm.targetX = Math.max(60, Math.min(W - 60, x));
+});
+window.addEventListener('mouseup', () => draggedWorm = null);
+
+canvas.addEventListener('touchstart', e => {
+  initAudio();
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  const t = e.touches[0];
+  const x = t.clientX - r.left, y = t.clientY - r.top;
+  if (gameOver) { resetGame(); return; }
+  draggedWorm = getWormAt(x, y);
+}, {passive:false});
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!draggedWorm) return;
+  const r = canvas.getBoundingClientRect();
+  const t = e.touches[0];
+  draggedWorm.targetX = Math.max(60, Math.min(W - 60, t.clientX - r.left));
+}, {passive:false});
+window.addEventListener('touchend', () => draggedWorm = null);
+
+window.addEventListener('keydown', e => {
+  initAudio();
+  if (gameOver) { resetGame(); return; }
+  const step = 25;
+  if (e.key === 'ArrowLeft') { worm1.targetX = Math.max(60, worm1.targetX - step); }
+  if (e.key === 'ArrowRight') { worm1.targetX = Math.min(W - 60, worm1.targetX + step); }
+  if (e.key === 'a' || e.key === 'A') { worm2.targetX = Math.max(60, worm2.targetX - step); }
+  if (e.key === 'd' || e.key === 'D') { worm2.targetX = Math.min(W - 60, worm2.targetX + step); }
+});
+
+document.getElementById('muteBtn').addEventListener('click', () => {
+  muted = !muted;
+  document.getElementById('muteBtn').textContent = muted ? '🔇' : '🔊';
+});
+
+function drawWorm(w, time) {
+  const wobble = Math.sin(time * 0.005 + w.x) * 5;
+  const mouthOpen = Math.max(10, 25 + Math.sin(time * 0.008) * 8);
+  ctx.save();
+  ctx.translate(w.x, w.y + wobble);
+
+  // Body
+  ctx.fillStyle = w.color;
+  ctx.beginPath();
+  ctx.ellipse(0, 30, w.w/2, w.h/2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#333';
+  ctx.stroke();
+
+  // Segments
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 3;
+  for (let i = -1; i <= 1; i++) {
+    ctx.beginPath();
+    ctx.arc(0, 20 + i * 25, w.w/2 - 8, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Eyes
+  ctx.fillStyle = '#FFF';
+  ctx.beginPath(); ctx.arc(-18, -10, 14, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle='#333'; ctx.lineWidth=2; ctx.stroke();
+  ctx.beginPath(); ctx.arc(18, -10, 14, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.arc(-16, -10, 5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(20, -10, 5, 0, Math.PI*2); ctx.fill();
+
+  // Mouth
+  ctx.fillStyle = '#8B0000';
+  ctx.beginPath();
+  ctx.ellipse(0, 12, mouthOpen, 18, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // Cheeks
+  ctx.fillStyle = 'rgba(255,100,100,0.4)';
+  ctx.beginPath(); ctx.arc(-28, 15, 8, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(28, 15, 8, 0, Math.PI*2); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawMirror() {
+  const mw = Math.min(160, W * 0.22);
+  const mx = W - mw - 10;
+  const my = 10;
+  const mh = Math.min(220, H * 0.35);
+
+  // Mirror frame
+  ctx.fillStyle = '#D2691E';
+  roundRect(mx - 6, my - 6, mw + 12, mh + 12, 14);
+  ctx.fill();
+  ctx.fillStyle = '#FFE4B5';
+  roundRect(mx, my, mw, mh, 10);
+  ctx.fill();
+  ctx.strokeStyle = '#8B4513';
+  ctx.lineWidth = 3;
+  roundRect(mx, my, mw, mh, 10);
+  ctx.stroke();
+
+  // Title
+  ctx.fillStyle = '#8B4513';
+  ctx.font = `bold ${Math.max(12, mw * 0.12)}px Comic Sans MS`;
+  ctx.textAlign = 'center';
+  ctx.fillText('WORM TUMMY', mx + mw/2, my + 24);
+
+  // Stomach contents
+  const rows = 4, cols = 3;
+  const cellW = (mw - 20) / cols;
+  const cellH = (mh - 50) / rows;
+  for (let i = 0; i < foodsNeeded; i++) {
+    const cx = mx + 10 + (i % cols) * cellW + cellW/2;
+    const cy = my + 45 + Math.floor(i / cols) * cellH + cellH/2;
+    if (i < caught.length) {
+      ctx.font = `${Math.max(16, cellH * 0.6)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(caught[i].type, cx, cy);
+    } else {
+      ctx.strokeStyle = 'rgba(139,69,19,0.2)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy, cellH*0.25, 0, Math.PI*2); ctx.stroke();
+    }
+  }
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawGround() {
+  ctx.fillStyle = '#228B22';
+  ctx.beginPath();
+  ctx.ellipse(W/2, H + 80, W * 0.8, 140, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Grass tufts
+  ctx.strokeStyle = '#32CD32';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < W; i += 40) {
+    ctx.beginPath(); ctx.moveTo(i, H - 20); ctx.lineTo(i + 8, H - 45); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(i + 10, H - 18); ctx.lineTo(i + 16, H - 38); ctx.stroke();
+  }
+}
+
+function drawClouds() {
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  const time = Date.now();
+  const clouds = [{x: W*0.15, y: H*0.1, s: 1}, {x: W*0.6, y: H*0.06, s: 0.8}, {x: W*0.85, y: H*0.12, s: 1.1}];
+  clouds.forEach(c => {
+    const cx = ((c.x + time * 0.02) % (W + 200)) - 100;
+    ctx.beginPath(); ctx.arc(cx, c.y, 40 * c.s, 0, Math.PI*2);
+    ctx.arc(cx + 35*c.s, c.y - 15*c.s, 45*c.s, 0, Math.PI*2);
+    ctx.arc(cx + 70*c.s, c.y, 35*c.s, 0, Math.PI*2);
+    ctx.fill();
+  });
+}
+
+function drawGameOver() {
+  const alpha = Math.min(1, (Date.now() - winTime) / 800);
+  ctx.fillStyle = `rgba(0,0,0,${alpha * 0.5})`;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const boxW = Math.min(420, W - 40);
+  const boxH = 200;
+  const bx = (W - boxW)/2, by = (H - boxH)/2;
+
+  ctx.fillStyle = '#FFF';
+  roundRect(bx, by, boxW, boxH, 20);
+  ctx.fill();
+  ctx.strokeStyle = '#FFD700';
+  ctx.lineWidth = 6;
+  roundRect(bx, by, boxW, boxH, 20);
+  ctx.stroke();
+
+  ctx.fillStyle = '#FF4500';
+  ctx.font = `bold ${Math.max(24, boxW * 0.09)}px Comic Sans MS`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Good Game, Bobo!', W/2, H/2 - 20);
+
+  ctx.fillStyle = '#333';
+  ctx.font = `${Math.max(14, boxW * 0.05)}px Comic Sans MS`;
+  ctx.fillText('Tap or press any key to play again', W/2, H/2 + 35);
+
+  // Stars
+  for (let i = 0; i < 12; i++) {
+    const sx = bx + 20 + (i % 4) * (boxW/4);
+    const sy = by + 20 + Math.floor(i/4) * 50;
+    ctx.fillStyle = i % 2 === 0 ? '#FFD700' : '#FFA500';
+    drawStar(sx, sy, 5, 10, 5);
+  }
+  ctx.restore();
+}
+
+function drawStar(cx, cy, spikes, outer, inner) {
+  let rot = Math.PI/2 * 3, x = cx, y = cy, step = Math.PI/spikes;
+  ctx.beginPath(); ctx.moveTo(cx, cy - outer);
+  for (let i = 0; i < spikes; i++) {
+    x = cx + Math.cos(rot) * outer; y = cy + Math.sin(rot) * outer; ctx.lineTo(x, y); rot += step;
+    x = cx + Math.cos(rot) * inner; y = cy + Math.sin(rot) * inner; ctx.lineTo(x, y); rot += step;
+  }
+  ctx.lineTo(cx, cy - outer); ctx.closePath(); ctx.fill();
+}
+
+function update() {
+  if (gameOver) return;
+
+  // Smooth worm movement
+  worm1.x += (worm1.targetX - worm1.x) * 0.15;
+  worm2.x += (worm2.targetX - worm2.x) * 0.15;
+
+  // Spawn food
+  spawnTimer++;
+  if (spawnTimer > spawnInterval) {
+    spawnFood();
+    spawnTimer = 0;
+    spawnInterval = Math.max(25, 60 - score * 2);
+  }
+
+  // Update foods
+  for (let i = foods.length - 1; i >= 0; i--) {
+    let f = foods[i];
+    f.y += f.speed;
+    f.rot += f.rotSpeed;
+
+    // Check catch in mouth
+    for (let w of [worm1, worm2]) {
+      const dx = f.x - w.x;
+      const dy = f.y - (w.y + 12);
+      if (Math.abs(dx) < 30 && Math.abs(dy) < 30) {
+        caught.push(f);
+        foods.splice(i, 1);
+        score++;
+        playChomp();
+        addParticles(w.x, w.y + 20, '#FF69B4');
+        if (score >= foodsNeeded) {
+          gameOver = true;
+          winTime = Date.now();
+          playBurp();
+          setTimeout(() => playWin(), 400);
+        }
+        break;
+      }
+    }
+
+    // Missed
+    if (f.y > H + 20) {
+      foods.splice(i, 1);
+      playMiss();
+    }
+  }
+
+  // Particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    let p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.2; p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function draw() {
+  const time = Date.now();
+  ctx.clearRect(0, 0, W, H);
+
+  // Sky
+  ctx.fillStyle = '#87CEEB';
+  ctx.fillRect(0, 0, W, H);
+  drawClouds();
+  drawGround();
+
+  // Food
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let f of foods) {
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.rot);
+    ctx.font = `${f.size}px sans-serif`;
+    ctx.fillText(f.type, 0, 0);
+    ctx.restore();
+  }
+
+  // Worms
+  drawWorm(worm1, time);
+  drawWorm(worm2, time);
+
+  // Particles
+  for (let p of particles) {
+    ctx.globalAlpha = p.life / 30;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Mirror
+  drawMirror();
+
+  // Progress
+  ctx.fillStyle = '#333';
+  ctx.font = `bold ${Math.max(14, W * 0.025)}px Comic Sans MS`;
+  ctx.textAlign = 'left';
+  ctx.fillText(`Yum! ${score} / ${foodsNeeded}`, 20, 40);
+
+  // Hint
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.font = `${Math.max(12, W * 0.02)}px Comic Sans MS`;
+  ctx.textAlign = 'center';
+  ctx.fillText('Drag worms or use ← → and A D keys!', W/2, H - 10);
+
+  if (gameOver) drawGameOver();
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
